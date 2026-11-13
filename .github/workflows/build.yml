@@ -1,0 +1,70 @@
+# Baut die Gästemappe aus der neuesten HTML-Datei in quelle/ und veröffentlicht sie
+# unter https://guide.chaletsissi.com (GitHub Pages, Quelle "GitHub Actions").
+name: Gästemappe veröffentlichen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "quelle/**"
+      - "tools/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Neueste HTML-Datei in quelle/ finden
+        id: quelle
+        run: |
+          newest=""; best=-1
+          while IFS= read -r -d '' f; do
+            t=$(git log -1 --format=%ct -- "$f"); t=${t:-0}
+            if [ "$t" -ge "$best" ]; then best=$t; newest=$f; fi
+          done < <(find quelle -maxdepth 1 -type f -iname '*.html' -print0)
+          if [ -z "$newest" ]; then echo "::error::Keine HTML-Datei im Ordner quelle/ gefunden"; exit 1; fi
+          echo "Verwende: $newest"
+          echo "datei=$newest" >> "$GITHUB_OUTPUT"
+
+      - name: Seite bauen
+        env:
+          QUELLE: ${{ steps.quelle.outputs.datei }}
+        run: |
+          mkdir -p _site
+          python3 tools/extract.py "$QUELLE" _site
+          python3 tools/finalize.py _site
+          python3 tools/extras.py _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
