@@ -8,6 +8,7 @@ on:
     paths:
       - "quelle/**"
       - "*.html"
+      - "*.zip"
       - "tools/**"
       - ".github/workflows/**"
   workflow_dispatch:
@@ -33,17 +34,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Nimmt die zuletzt hochgeladene HTML-Datei aus quelle/ oder (falls dort
-      # versehentlich hochgeladen) aus dem Hauptordner, index.html ausgenommen.
-      - name: Neueste HTML-Datei finden
+      # Nimmt die zuletzt hochgeladene HTML- oder ZIP-Datei aus quelle/ oder dem
+      # Hauptordner (index.html ausgenommen).
+      - name: Neueste Quelldatei finden
         id: quelle
         run: |
           newest=""; best=-1
           while IFS= read -r -d '' f; do
             t=$(git log -1 --format=%ct -- "$f"); t=${t:-0}
             if [ "$t" -ge "$best" ]; then best=$t; newest=$f; fi
-          done < <(find quelle . -maxdepth 1 -type f -iname '*.html' ! -name 'index.html' -print0)
-          if [ -z "$newest" ]; then echo "::error::Keine HTML-Datei in quelle/ oder im Hauptordner gefunden"; exit 1; fi
+          done < <(find quelle . -maxdepth 1 -type f \( -iname '*.html' -o -iname '*.zip' \) ! -name 'index.html' -print0)
+          if [ -z "$newest" ]; then echo "::error::Keine HTML- oder ZIP-Datei in quelle/ oder im Hauptordner gefunden"; exit 1; fi
           echo "Verwende: $newest"
           echo "datei=$newest" >> "$GITHUB_OUTPUT"
 
@@ -52,6 +53,20 @@ jobs:
           QUELLE: ${{ steps.quelle.outputs.datei }}
         run: |
           mkdir -p _site
+          case "${QUELLE,,}" in
+            *.zip)
+              rm -rf _zip && mkdir _zip && unzip -q "$QUELLE" -d _zip -x '__MACOSX/*'
+              main=$(find _zip -type f -iname 'index.html' -printf '%d\t%p\n' | sort -n | head -n 1 | cut -f2-)
+              if [ -z "$main" ]; then
+                main=$(find _zip -type f -iname '*.html' -printf '%s\t%p\n' | sort -nr | head -n 1 | cut -f2-)
+              fi
+              if [ -z "$main" ]; then echo "::error::Keine HTML-Datei in der ZIP gefunden"; exit 1; fi
+              echo "HTML aus ZIP: $main"
+              cp -r "$(dirname "$main")"/. _site/
+              rm -f "_site/$(basename "$main")"
+              QUELLE="$main"
+              ;;
+          esac
           python3 tools/extract.py "$QUELLE" _site
           python3 tools/finalize.py _site
           python3 tools/extras.py _site
